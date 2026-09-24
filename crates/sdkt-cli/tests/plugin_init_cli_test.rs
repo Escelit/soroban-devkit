@@ -30,6 +30,7 @@ const DOCUMENTED_FILES: &[&str] = &[
     "src/plugin_abi.rs",
     "src/plugin_abi_wasm.rs",
     "plugin/plugin.toml",
+    "plugin-wasm/plugin.toml",
     "README.md",
     ".gitignore",
 ];
@@ -102,6 +103,15 @@ fn plugin_init_creates_documented_layout() {
     assert!(
         readme.contains(&format!("cp target/release/{artifact} plugin/")),
         "README build-to-audit instructions must reference the same artifact"
+    );
+
+    // The WASM manifest is pre-staged too, with kind/artifact matched.
+    let wasm = fs::read_to_string(project.join("plugin-wasm/plugin.toml")).unwrap();
+    assert!(wasm.contains("kind = \"wasm\""));
+    assert!(wasm.contains("artifact = \"tmp_rule.wasm\""));
+    assert!(
+        readme.contains("--features wasm-plugins"),
+        "README must document the WASM build path"
     );
 }
 

@@ -136,8 +136,9 @@ my-rule/
   src/lib.rs             # AuditRule impl with TODO-marked check() + unit tests
   src/plugin_abi.rs      # native C-ABI exports (feature `plugins`)
   src/plugin_abi_wasm.rs # WASM ABI exports (feature `wasm-plugins`)
-  plugin/plugin.toml     # pre-staged plugin metadata for pack/install
-  README.md              # build → pack → install → audit walkthrough
+  plugin/plugin.toml     # pre-staged native metadata for pack/install
+  plugin-wasm/plugin.toml # pre-staged WASM metadata for pack/install
+  README.md              # build -> pack -> install -> audit walkthrough
   .gitignore
 ```
 

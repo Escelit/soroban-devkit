@@ -160,6 +160,7 @@ pub const PLUGIN_SCAFFOLD_FILES: &[&str] = &[
     "src/plugin_abi.rs",
     "src/plugin_abi_wasm.rs",
     "plugin/plugin.toml",
+    "plugin-wasm/plugin.toml",
     "README.md",
     ".gitignore",
 ];
@@ -295,6 +296,7 @@ pub fn generate_plugin_project(config: &PluginScaffoldConfig) -> io::Result<Scaf
 
     fs::create_dir_all(root.join("src"))?;
     fs::create_dir_all(root.join("plugin"))?;
+    fs::create_dir_all(root.join("plugin-wasm"))?;
 
     let mut created = Vec::new();
 
@@ -736,6 +738,32 @@ abi_minor = 0
     );
     write_template(root, "plugin/plugin.toml", &plugin_toml, &mut created)?;
 
+    // The same rule also targets WASM (Phase C): `--features wasm-plugins`
+    // produces a sandboxed .wasm module, so stage a matching manifest with the
+    // correct kind/extension. Otherwise pack/install of the .wasm artifact
+    // would fail the store's kind-vs-extension validation.
+    let wasm_plugin_toml = format!(
+        r#"id = "{lib_name}"
+name = "{display_name}"
+version = "0.1.0"
+author = "your-name"
+description = "{description}"
+kind = "wasm"
+artifact = "{lib_name}.wasm"
+abi_major = 1
+abi_minor = 0
+"#,
+        lib_name = lib_name,
+        display_name = display_name,
+        description = description,
+    );
+    write_template(
+        root,
+        "plugin-wasm/plugin.toml",
+        &wasm_plugin_toml,
+        &mut created,
+    )?;
+
     let readme = format!(
         r#"# {display_name}
 
@@ -753,7 +781,8 @@ This crate builds as:
 - `src/lib.rs` — the [`AuditRule`] implementation with a TODO-marked `check()`.
 - `src/plugin_abi.rs` — native C-ABI exports (`plugins` feature).
 - `src/plugin_abi_wasm.rs` — WASM JSON-ABI exports (`wasm-plugins` feature).
-- `plugin/plugin.toml` — metadata for the pack/install flow.
+- `plugin/plugin.toml` — metadata for the pack/install flow (native).
+- `plugin-wasm/plugin.toml` — metadata for the pack/install flow (WASM).
 
 ## Workflow
 
@@ -793,6 +822,27 @@ sdkt audit path/to/contract.rs --rules {lib_name}
 `--rules {lib_name}` resolves the plugin id to the installed artifact. You can
 also point it at the artifact directly: `--rules plugin/{artifact}`.
 
+### 6. WASM plugin (Phase C, optional)
+
+The same rule also builds as a sandboxed `.wasm` module. Build it and stage the
+artifact next to the pre-staged WASM manifest (`plugin-wasm/plugin.toml`,
+`kind = "wasm"`):
+
+```bash
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1 --features wasm-plugins
+mkdir -p plugin-wasm
+cp target/wasm32-wasip1/release/{lib_name}.wasm plugin-wasm/
+```
+
+Then pack or install exactly as above, passing `plugin-wasm/` instead of
+`plugin/`:
+
+```bash
+sdkt plugin pack plugin-wasm/ --output {lib_name}-wasm-0.1.0.sdktplugin
+sdkt plugin install plugin-wasm/{lib_name}.wasm
+```
+
 ## Testing
 
 ```bash
@@ -815,7 +865,7 @@ authoring guide.
     );
     write_template(root, "README.md", &readme, &mut created)?;
 
-    write_template(root, ".gitignore", "/target\n/.sdkt\n/plugin/*.so\n/plugin/*.dylib\n/plugin/*.dll\n/plugin/*.wasm\n*.sdktplugin\n", &mut created)?;
+    write_template(root, ".gitignore", "/target\n/.sdkt\n/plugin/*.so\n/plugin/*.dylib\n/plugin/*.dll\n/plugin/*.wasm\n/plugin-wasm/*.wasm\n*.sdktplugin\n", &mut created)?;
 
     Ok(ScaffoldResult {
         files_created: created,
@@ -996,6 +1046,11 @@ mod tests {
             std::env::consts::DLL_SUFFIX
         );
         assert!(toml.contains(&format!("artifact = \"{artifact}\"")));
+        // WASM manifest mirrors the native one but with kind/extension matched.
+        let wasm = fs::read_to_string(p.join("plugin-wasm/plugin.toml")).unwrap();
+        assert!(wasm.contains("kind = \"wasm\""));
+        assert!(wasm.contains("artifact = \"plugin_cargo.wasm\""));
+        assert!(wasm.contains("abi_major = 1"));
         let _ = fs::remove_dir_all(&p);
     }
 
