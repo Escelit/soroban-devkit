@@ -7,7 +7,9 @@
 //! finding) rather than merely compiling. The scaffold's `sdkt-audit`
 //! dependency is patched to the in-tree workspace crate (not the published
 //! crates.io version) so the templates are compiled against the current
-//! workspace API.
+//! workspace API. An additional `#[ignore]`d smoke test verifies the unpatched
+//! standalone build resolves `sdkt-audit` from crates.io; the release workflow
+//! runs it after the crates are published.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -215,5 +217,26 @@ fn plugin_init_scaffold_builds_and_rule_produces_finding() {
     assert!(
         status.success(),
         "Scaffolded plugin unit tests (finding production) failed"
+    );
+}
+
+/// Verifies the scaffold resolves the published `sdkt-audit` from crates.io
+/// exactly as a standalone author would experience it, with no `[patch]`.
+/// Kept out of ordinary PR runs because the workspace version may not yet be
+/// published; the release workflow runs it after the crates publish loop.
+#[test]
+#[ignore = "requires the workspace sdkt-audit version to be published on crates.io"]
+fn plugin_init_scaffold_resolves_published_audit() {
+    let tmp = TempDir::new().unwrap();
+    let project = init_project(tmp.path(), "tmp-rule");
+
+    let status = StdCommand::new("cargo")
+        .args(["build", "--release", "--features", "plugins"])
+        .current_dir(&project)
+        .status()
+        .expect("cargo build failed to execute");
+    assert!(
+        status.success(),
+        "Scaffolded plugin failed to build against the published sdkt-audit"
     );
 }

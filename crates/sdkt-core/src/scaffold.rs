@@ -197,14 +197,22 @@ fn plugin_rule_id(name: &str) -> String {
 /// Upper-camel identifier for the generated rule struct, e.g.
 /// `my-rule` → `MyRule`.
 fn plugin_struct_name(name: &str) -> String {
-    name.split(['-', '_'])
+    let identifier: String = name
+        .split(['-', '_'])
         .filter(|s| !s.is_empty())
         .map(|seg| {
             let mut it = seg.chars();
             let head = it.next().map(|c| c.to_ascii_uppercase()).unwrap_or('X');
             head.to_string() + &it.collect::<String>()
         })
-        .collect()
+        .collect();
+    // `Self` is a reserved Rust identifier, so a project named `self` must not
+    // emit `pub struct Self;`. Prefix it; all other names stay unchanged.
+    if identifier == "Self" {
+        format!("Plugin{identifier}")
+    } else {
+        identifier
+    }
 }
 
 /// Human-readable plugin name, e.g. `my-rule` → `My Rule`.
@@ -1022,6 +1030,16 @@ mod tests {
         let p2 = tmp_plugin("9bad");
         assert!(generate_plugin_project(&pcfg(&p2, false)).is_err());
         let _ = fs::remove_dir_all(&p);
+    }
+
+    #[test]
+    fn plugin_struct_name_avoids_reserved_identifier() {
+        // `self` must not yield `pub struct Self;` (Self is a Rust keyword).
+        assert_eq!(plugin_struct_name("self"), "PluginSelf");
+        // All other names keep their existing derived identifier.
+        assert_eq!(plugin_struct_name("self-rule"), "SelfRule");
+        assert_eq!(plugin_struct_name("my-rule"), "MyRule");
+        assert_eq!(plugin_struct_name("snake_case_rule"), "SnakeCaseRule");
     }
 
     #[test]

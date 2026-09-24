@@ -245,3 +245,11 @@ jobs:
             echo "== cargo publish -p $c =="
             cargo publish -p "$c"
           done
+
+      # Now that sdkt-audit is live on crates.io, check the scaffolded plugin
+      # resolves it unpatch, i.e. that the documented standalone build works.
+      - name: Check standalone scaffold against published crates
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          cargo test -p sdkt-cli --test plugin_init_cli_test \
+            plugin_init_scaffold_resolves_published_audit -- --ignored
