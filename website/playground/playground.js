@@ -9,7 +9,8 @@
  * The uploaded bytes exist only as a Uint8Array on this thread; they are
  * transferred into the worker, inspected there, and never sent anywhere.
  * The only network requests the app makes are for its own static assets
- * (this page, the CSS, the worker, and the bundled sdkt WASM runtime).
+ * (this page, the CSS, the worker, the bundled sdkt WASM runtime, and the
+ * bundled example contracts in examples/).
  */
 'use strict';
 
@@ -37,6 +38,18 @@
   const pending = new Map();
   let currentFile = null;
   let inspected = false;
+
+  // Bundled example contracts, shipped as static assets next to this page.
+  const EXAMPLES = {
+    us_old: {
+      asset: 'examples/us_old.wasm',
+      label: 'example: us_old.wasm (bundled)',
+    },
+    us_new: {
+      asset: 'examples/us_new.wasm',
+      label: 'example: us_new.wasm (bundled)',
+    },
+  };
 
   /* ---------- helpers ---------- */
 
@@ -413,6 +426,27 @@
     });
   }
 
+  function loadExample(key) {
+    const ex = EXAMPLES[key];
+    if (!ex) return;
+    setStatus('loading', 'loading example…');
+    fetch(ex.asset, { cache: 'force-cache' })
+      .then((res) => {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.arrayBuffer();
+      })
+      .then((buf) => {
+        const file = new File([new Uint8Array(buf)], ex.label, { type: 'application/wasm' });
+        acceptFile(file);
+      })
+      .catch((err) => {
+        setStatus('err', 'example load failed');
+        showError('Could not load the bundled example (' +
+          (err && err.message ? err.message : err) + '). ' +
+          'This only affects the examples — uploading your own .wasm still works.');
+      });
+  }
+
   function reset() {
     currentFile = null;
     inspected = false;
@@ -450,6 +484,10 @@
   });
 
   resetBtn.addEventListener('click', reset);
+
+  document.querySelectorAll('.example-btn').forEach((btn) => {
+    btn.addEventListener('click', () => loadExample(btn.dataset.example));
+  });
 
   /* ---------- worker responses ---------- */
 
