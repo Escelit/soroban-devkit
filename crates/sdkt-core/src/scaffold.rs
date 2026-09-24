@@ -332,7 +332,7 @@ crate-type = ["rlib", "cdylib"]
     let lib_rs = format!(
         r#"//! {struct_name} — an `sdkt-audit` plugin rule scaffolded by `sdkt plugin init`.
 //!
-//! Demonstrates the plugin author workflow from `docs/plugin-authoring.md`:
+//! Demonstrates the plugin author workflow from `docs/plugins/plugin-authoring.md`:
 //! 1. Implement the [`sdkt_audit::AuditRule`] trait.
 //! 2. Register the rule via [`register`] (or the `sdkt_audit::register_rule!` macro).
 //! 3. Emit a [`sdkt_audit::Finding`] when the rule's condition holds.
@@ -702,6 +702,14 @@ pub fn sdkt_plugin_check(input_json: String) -> FnResult<String> {{
         &mut created,
     )?;
 
+    // Name the artifact for the host platform (libmy_rule.so on Linux,
+    // libmy_rule.dylib on macOS, my_rule.dll on Windows) so the generated
+    // plugin.toml and README point at the file `cargo build` actually produces.
+    let artifact = format!(
+        "{}{lib_name}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
     let plugin_toml = format!(
         r#"id = "{lib_name}"
 name = "{display_name}"
@@ -709,13 +717,14 @@ version = "0.1.0"
 author = "your-name"
 description = "{description}"
 kind = "native"
-artifact = "lib{lib_name}.so"
+artifact = "{artifact}"
 abi_major = 1
 abi_minor = 0
 "#,
         lib_name = lib_name,
         display_name = display_name,
         description = description,
+        artifact = artifact,
     );
     write_template(root, "plugin/plugin.toml", &plugin_toml, &mut created)?;
 
@@ -746,13 +755,13 @@ This crate builds as:
 cargo build --release --features plugins
 ```
 
-Produces `target/release/lib{lib_name}.so` (`.dylib` on macOS, `.dll` on Windows).
+Produces `target/release/{artifact}`.
 
 ### 2. Stage the artifact next to `plugin.toml`
 
 ```bash
 mkdir -p plugin
-cp target/release/lib{lib_name}.so plugin/   # adjust extension per platform
+cp target/release/{artifact} plugin/
 ```
 
 ### 3. Pack a portable bundle (optional)
@@ -764,7 +773,7 @@ sdkt plugin pack plugin/ --output {lib_name}-0.1.0.sdktplugin
 ### 4. Install into the local store
 
 ```bash
-sdkt plugin install plugin/lib{lib_name}.so
+sdkt plugin install plugin/{artifact}
 ```
 
 ### 5. Run the rule against a contract
@@ -774,7 +783,7 @@ sdkt audit path/to/contract.rs --rules {lib_name}
 ```
 
 `--rules {lib_name}` resolves the plugin id to the installed artifact. You can
-also point it at the artifact directly: `--rules plugin/lib{lib_name}.so`.
+also point it at the artifact directly: `--rules plugin/{artifact}`.
 
 ## Testing
 
@@ -787,13 +796,14 @@ must produce exactly one finding when a function name contains `{trigger}`, and
 stay silent otherwise. Replace that logic with your real check, then update the
 test.
 
-See `docs/plugin-authoring.md` in the Soroban DevKit repository for the full
+See `docs/plugins/plugin-authoring.md` in the Soroban DevKit repository for the full
 authoring guide.
 "#,
         display_name = display_name,
         rule_id = rule_id,
         lib_name = lib_name,
         trigger = trigger,
+        artifact = artifact,
     );
     write_template(root, "README.md", &readme, &mut created)?;
 
@@ -971,7 +981,13 @@ mod tests {
         assert!(cargo.contains("name = \"plugin_cargo\""));
         let toml = fs::read_to_string(p.join("plugin/plugin.toml")).unwrap();
         assert!(toml.contains("id = \"plugin_cargo\""));
-        assert!(toml.contains("artifact = \"libplugin_cargo.so\""));
+        let artifact = format!(
+            "{}{}{}",
+            std::env::consts::DLL_PREFIX,
+            "plugin_cargo",
+            std::env::consts::DLL_SUFFIX
+        );
+        assert!(toml.contains(&format!("artifact = \"{artifact}\"")));
         let _ = fs::remove_dir_all(&p);
     }
 

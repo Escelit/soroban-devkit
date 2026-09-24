@@ -114,12 +114,17 @@ have to copy the reference implementation by hand:
 ```bash
 sdkt plugin init my-rule        # name becomes the rule id: MY-RULE-001
 cd my-rule
-cargo build --release --features plugins          # produces target/release/libmy_rule.so
-cp target/release/libmy_rule.so plugin/
+cargo build --release --features plugins          # produces the native cdylib for your platform
+cp target/release/libmy_rule.so plugin/           # .so on Linux, .dylib on macOS, my_rule.dll on Windows
 sdkt plugin pack plugin/ --output my_rule.sdktplugin
 sdkt plugin install plugin/libmy_rule.so
 sdkt audit contracts/token/src/lib.rs --rules my_rule
 ```
+
+The scaffold names the artifact and `plugin.toml` entry for the platform you
+run `sdkt plugin init` on (`libmy_rule.so` on Linux, `libmy_rule.dylib` on
+macOS, `my_rule.dll` on Windows) so the pack/install commands resolve to the
+file `cargo build` actually produced.
 
 The scaffold derives everything from the project name: crate/lib name
 (`my-rule` → `my_rule`), rule id (`MY-RULE-001`), and the placeholder trigger

@@ -1,10 +1,13 @@
 //! Integration tests for `sdkt plugin init`.
 //!
 //! The first three tests are fast and offline (pure scaffold verification).
-//! The last two compile the scaffolded crate against the published `sdkt-audit`
-//! from crates.io and are therefore heavier; they pin the acceptance criteria
-//! that a scaffolded plugin builds with `--features plugins` and that the
-//! placeholder rule is wired (produces a finding) rather than merely compiling.
+//! The last one compiles the scaffolded crate from scratch and is therefore
+//! heavier; it pins the acceptance criteria that a scaffolded plugin builds
+//! with `--features plugins` and that the placeholder rule is wired (produces a
+//! finding) rather than merely compiling. The scaffold's `sdkt-audit`
+//! dependency is patched to the in-tree workspace crate (not the published
+//! crates.io version) so the templates are compiled against the current
+//! workspace API.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -77,11 +80,27 @@ fn plugin_init_creates_documented_layout() {
     assert!(cargo.contains("plugins = [\"sdkt-audit/plugins\"]"));
     assert!(cargo.contains("crate-type = [\"rlib\", \"cdylib\"]"));
 
-    // plugin.toml is pre-staged under plugin/ for the pack/install flow.
+    // plugin.toml is pre-staged under plugin/ for the pack/install flow, and its
+    // artifact name matches the host platform (lib…so / lib….dylib / ….dll) so
+    // the README commands resolve to the file `cargo build` actually produces.
     let toml = fs::read_to_string(project.join("plugin/plugin.toml")).unwrap();
     assert!(toml.contains("id = \"tmp_rule\""));
     assert!(toml.contains("kind = \"native\""));
     assert!(toml.contains("abi_major = 1"));
+    let artifact = format!(
+        "{}{}{}",
+        std::env::consts::DLL_PREFIX,
+        "tmp_rule",
+        std::env::consts::DLL_SUFFIX
+    );
+    assert!(
+        toml.contains(&format!("artifact = \"{artifact}\"")),
+        "plugin.toml must name the platform-native artifact"
+    );
+    assert!(
+        readme.contains(&format!("cp target/release/{artifact} plugin/")),
+        "README build-to-audit instructions must reference the same artifact"
+    );
 }
 
 #[test]
@@ -112,7 +131,7 @@ fn plugin_init_json_output() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"status\":\"created\""));
+        .stdout(predicate::str::contains("\"status\": \"created\""));
 
     assert!(project.join("src/lib.rs").exists());
 }
@@ -132,13 +151,37 @@ fn find_cdylib_artifact(release_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Absolute path to the in-tree `sdkt-audit` crate. The heavy test patches the
+/// scaffold's `sdkt-audit` dependency to this workspace source via a cargo
+/// `--config` flag, so the scaffolded templates are compiled against the API of
+/// the current PR rather than the version published on crates.io (which can
+/// drift behind the workspace or not yet exist for a new version).
+fn sdkt_audit_patch_config() -> String {
+    // CARGO_MANIFEST_DIR is the package dir (crates/sdkt-cli); `..` lands in
+    // crates/, so the in-tree crate sits at /../sdkt-audit.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../sdkt-audit");
+    // Normalise to forward slashes so the TOML value is valid on Windows too.
+    format!(
+        "patch.crates-io.sdkt-audit.path=\"{}\"",
+        path.replace('\\', "/")
+    )
+}
+
 #[test]
-fn plugin_init_scaffold_builds_with_features_plugins() {
+fn plugin_init_scaffold_builds_and_rule_produces_finding() {
     let tmp = TempDir::new().unwrap();
     let project = init_project(tmp.path(), "tmp-rule");
 
+    // Build the native cdylib in release mode exactly as the README instructs.
     let status = StdCommand::new("cargo")
-        .args(["build", "--release", "--features", "plugins"])
+        .arg("build")
+        .arg("--release")
+        .args([
+            "--features",
+            "plugins",
+            "--config",
+            &sdkt_audit_patch_config(),
+        ])
         .current_dir(&project)
         .status()
         .expect("cargo build failed to execute");
@@ -152,19 +195,20 @@ fn plugin_init_scaffold_builds_with_features_plugins() {
         artifact.is_some(),
         "cdylib artifact was not produced by the build"
     );
-}
 
-#[test]
-fn plugin_init_scaffold_rule_produces_finding() {
     // The scaffolded crate ships a unit test asserting the placeholder rule
     // fires (exactly one finding with the derived rule id) on a trivially
     // matching function name and stays silent otherwise. Running `cargo test`
-    // therefore proves the rule is wired end-to-end, not just compiling.
-    let tmp = TempDir::new().unwrap();
-    let project = init_project(tmp.path(), "tmp-rule");
-
+    // therefore proves the rule is wired end-to-end, not just compiling. Same
+    // project, same target dir, so the dependency graph is compiled once.
     let status = StdCommand::new("cargo")
-        .args(["test", "--features", "plugins"])
+        .arg("test")
+        .args([
+            "--features",
+            "plugins",
+            "--config",
+            &sdkt_audit_patch_config(),
+        ])
         .current_dir(&project)
         .status()
         .expect("cargo test failed to execute");
