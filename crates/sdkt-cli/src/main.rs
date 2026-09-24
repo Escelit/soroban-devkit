@@ -5164,7 +5164,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             for f in &result.files_created {
                                 println!("  ✓ {}", f);
                             }
-                            println!("✓ Ready — run: cargo build --release --features plugins");
+                            println!(
+                                "✓ Ready — in the new project directory, run: cargo build --release --features plugins"
+                            );
                         }
                     }
                     Err(e) => {
