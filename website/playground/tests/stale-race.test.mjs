@@ -30,6 +30,8 @@ const els = new Map();
 const ids = ['dropzone', 'fileInput', 'filebar', 'fname', 'fmeta', 'status',
   'errorBox', 'errorMsg', 'results', 'resetBtn', 'modeChip'];
 for (const id of ids) els.set(id, makeEl());
+let resultAppendCount = 0;
+els.get('results').appendChild = () => { resultAppendCount += 1; };
 
 const handlers = new Map();
 els.get('dropzone').addEventListener = (type, fn) => { if (type === 'drop') handlers.set('drop', fn); };
@@ -141,11 +143,14 @@ await tick();
 assert.equal(worker.inspects.length, 3, 'inspections queued: [exB, a, b]');
 worker.answer(2, payloadFor(null));     // b first -> renders b.wasm
 await tick();
+const bResultAppendCount = resultAppendCount;
 assert.equal(fname(), 'b.wasm', 'newer upload renders');
 worker.answer(1, payloadFor(null));     // a resolves late -> stale
 await tick();
 assert.equal(fname(), 'b.wasm', 'late a.wasm inspection must not overwrite b.wasm');
 assert.ok(statusText().startsWith('inspection complete'), 'status stays with b.wasm');
+assert.equal(resultAppendCount, bResultAppendCount,
+  'late a.wasm inspection must not re-render results');
 
 // 3) Reset invalidates in-flight work: a stalled inspection cannot re-render.
 // 3) Reset invalidates in-flight work: a stalled inspection cannot re-render.
