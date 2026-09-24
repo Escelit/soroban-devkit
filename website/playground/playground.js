@@ -39,6 +39,11 @@
   let currentFile = null;
   let inspected = false;
 
+  // Monotonic selection generation. Every user selection (upload or example)
+  // claims a fresh token; any async work that resolves under a stale token is
+  // discarded, so an older fetch/inspection can never overwrite a newer one.
+  let selection = 0;
+
   // Bundled example contracts, shipped as static assets next to this page.
   const EXAMPLES = {
     us_old: {
@@ -79,6 +84,9 @@
   }
 
   function clearError() { errorBox.hidden = true; }
+
+  function beginSelection() { return ++selection; }
+  function isCurrent(gen) { return gen === selection; }
 
   function post(msg) {
     return new Promise((resolve, reject) => {
@@ -396,8 +404,10 @@
 
   /* ---------- file flow ---------- */
 
-  function acceptFile(file) {
+  function acceptFile(file, gen) {
     if (!file) return;
+    // A call without a token (direct upload path) claims a fresh selection.
+    const g = gen !== undefined ? gen : beginSelection();
     // Extension + content validation happens in inspect() after read; the
     // picker is restricted to .wasm already, but drops can bypass that.
     currentFile = file;
@@ -408,19 +418,21 @@
     results.classList.add('hidden');
     inspected = false;
     setStatus('loading', 'inspecting…');
-    inspectFile(file);
+    inspectFile(file, g);
   }
 
-  function inspectFile(file) {
+  function inspectFile(file, gen) {
     file.arrayBuffer().then((buf) => {
       const bytes = new Uint8Array(buf);
       return post({ type: 'inspect', bytes });
     }).then((result) => {
+      if (!isCurrent(gen)) return;
       const dur = (result && result.duration_ms !== undefined)
         ? ' · ' + result.duration_ms + ' ms' : '';
       setStatus('ok', 'inspection complete' + dur);
       render(result);
     }).catch((err) => {
+      if (!isCurrent(gen)) return;
       setStatus('err', 'inspection failed');
       showError(String(err && err.message ? err.message : err));
     });
@@ -429,6 +441,8 @@
   function loadExample(key) {
     const ex = EXAMPLES[key];
     if (!ex) return;
+    // Claim the selection slot now so a later click invalidates this fetch.
+    const gen = beginSelection();
     setStatus('loading', 'loading example…');
     fetch(ex.asset, { cache: 'force-cache' })
       .then((res) => {
@@ -436,10 +450,12 @@
         return res.arrayBuffer();
       })
       .then((buf) => {
+        if (!isCurrent(gen)) return;
         const file = new File([new Uint8Array(buf)], ex.label, { type: 'application/wasm' });
-        acceptFile(file);
+        acceptFile(file, gen);
       })
       .catch((err) => {
+        if (!isCurrent(gen)) return;
         setStatus('err', 'example load failed');
         showError('Could not load the bundled example (' +
           (err && err.message ? err.message : err) + '). ' +
@@ -448,6 +464,8 @@
   }
 
   function reset() {
+    // Invalidate any in-flight fetch/inspection so it cannot re-render after reset.
+    beginSelection();
     currentFile = null;
     inspected = false;
     fileInput.value = '';
