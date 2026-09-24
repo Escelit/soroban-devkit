@@ -111,7 +111,7 @@ const fname = () => els.get('fname').textContent;
 const statusText = () => els.get('status').textContent;
 const resultsHidden = () => els.get('results').classList.contains('hidden');
 
-await import('file:///home/escelit/Desktop/soroban-devkit/website/playground/playground.js');
+await import(new URL('../playground.js', import.meta.url).href);
 await tick();
 const worker = workers[0];
 
