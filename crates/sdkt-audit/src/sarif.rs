@@ -104,8 +104,8 @@ pub struct SarifPhysicalLocation {
 #[derive(Debug, Serialize)]
 pub struct SarifArtifactLocation {
     pub uri: String,
-    #[serde(rename = "uriBaseId")]
-    pub uri_base_id: String,
+    #[serde(rename = "uriBaseId", skip_serializing_if = "Option::is_none")]
+    pub uri_base_id: Option<String>,
 }
 
 // ── Severity mapping ─────────────────────────────────────────────────────────
@@ -116,6 +116,114 @@ fn severity_to_level(s: Severity) -> &'static str {
         Severity::Warning => "warning",
         Severity::Info => "note",
     }
+}
+
+// ── URI helpers ───────────────────────────────────────────────────────────────
+
+/// Return `true` when `source_file` is an absolute path on either Unix or
+/// Windows.
+///
+/// Absolute paths must be converted to `file:` URIs rather than URI-references
+/// so that SARIF consumers can resolve them without a `uriBaseId`.
+fn is_absolute_source_path(source_file: &str) -> bool {
+    // Unix absolute: starts with `/`
+    if source_file.starts_with('/') {
+        return true;
+    }
+    // Windows absolute: `C:\…` or `C:/…` (drive letter + colon + separator)
+    let bytes = source_file.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    false
+}
+
+/// Percent-encode a single path *segment* (the text between `/` separators).
+///
+/// Encodes every byte that is not an RFC 3986 unreserved character or a
+/// sub-delimiter safe in a path segment. `/` is handled by the callers and
+/// must **not** be passed into this function.
+fn encode_path_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            // RFC 3986 unreserved characters
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            // sub-delimiters that are safe in path segments (RFC 3986 §3.3)
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b':'
+            | b'@' => out.push(byte as char),
+            // everything else: space, %, #, ?, [, ], …
+            b => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
+}
+
+/// Convert a relative file path into a percent-encoded URI-reference.
+///
+/// `/` separators are preserved; each segment between them is percent-encoded
+/// individually. Backslashes are first normalised to forward slashes.
+fn relative_uri_from_path(path: &str) -> String {
+    let normalised = path.replace('\\', "/");
+    normalised
+        .split('/')
+        .map(encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Convert an absolute Unix or Windows path into a `file:` URI.
+///
+/// * Unix `/foo/bar baz.rs` → `file:///foo/bar%20baz.rs`
+/// * Windows `C:\foo\bar baz.rs` → `file:///C:/foo/bar%20baz.rs`
+fn file_uri_from_path(path: &str) -> String {
+    // Normalise Windows separators and strip a drive prefix for encoding,
+    // then re-add it after.
+    let forward = path.replace('\\', "/");
+    // Split on `/` and encode each segment.
+    let encoded = forward
+        .split('/')
+        .map(|seg| {
+            // Preserve the empty segments that produce leading `//` in the URI
+            // and the drive letter segment (`C:`) as-is (`:` is allowed in
+            // path segments per RFC 3986 §3.3 and MUST NOT be encoded here
+            // because `C%3A` is not a valid Windows drive reference).
+            if seg.is_empty() || (seg.len() == 2 && seg.as_bytes()[1] == b':') {
+                seg.to_string()
+            } else {
+                encode_path_segment(seg)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    // Absolute Unix paths start with `/`; Windows paths start with the drive.
+    // `file:` URIs always have an empty authority (`//`), so the path starts
+    // with `///` for Unix (`file:` + `//` + `/path`) and `///C:/` for Windows.
+    format!("file://{}", encoded)
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -222,16 +330,26 @@ fn finding_to_result(f: &Finding, source_file: &str) -> SarifResult {
         None => f.message.clone(),
     };
 
+    let is_absolute = is_absolute_source_path(source_file);
+    let (uri, uri_base_id) = if is_absolute {
+        // Absolute paths become self-contained `file:` URIs; no base ID needed.
+        (file_uri_from_path(source_file), None)
+    } else {
+        // Relative paths are encoded as URI-references and anchored to the
+        // repository root via %SRCROOT% so GitHub Code Scanning resolves them.
+        (
+            relative_uri_from_path(source_file),
+            Some("%SRCROOT%".to_string()),
+        )
+    };
+
     SarifResult {
         rule_id: f.rule_id.clone(),
         level: severity_to_level(f.severity).to_string(),
         message: SarifMessage { text: message_text },
         locations: vec![SarifLocation {
             physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: source_file.to_string(),
-                    uri_base_id: "%SRCROOT%".to_string(),
-                },
+                artifact_location: SarifArtifactLocation { uri, uri_base_id },
             },
         }],
     }
@@ -413,7 +531,7 @@ mod tests {
     // ── Artifact location (file path) ─────────────────────────────────────
 
     #[test]
-    fn result_artifact_uri_matches_source_file() {
+    fn result_artifact_uri_relative_path_has_srcroot_base_id() {
         let mut report = AuditReport::default();
         report.add(finding("AUTH-001", Severity::Critical, "msg", None));
         let log = to_sarif(
@@ -429,8 +547,120 @@ mod tests {
         );
         assert_eq!(
             loc.physical_location.artifact_location.uri_base_id,
-            "%SRCROOT%"
+            Some("%SRCROOT%".to_string())
         );
+    }
+
+    #[test]
+    fn result_artifact_uri_unix_absolute_path_becomes_file_uri_no_base_id() {
+        let mut report = AuditReport::default();
+        report.add(finding("AUTH-001", Severity::Critical, "msg", None));
+        let log = to_sarif(&report, "/home/user/contracts/lib.rs", "2.5.0", &[]);
+        let loc = &log.runs[0].results[0].locations[0];
+        assert_eq!(
+            loc.physical_location.artifact_location.uri,
+            "file:///home/user/contracts/lib.rs"
+        );
+        assert_eq!(
+            loc.physical_location.artifact_location.uri_base_id, None,
+            "absolute paths must not carry uriBaseId"
+        );
+    }
+
+    #[test]
+    fn result_artifact_uri_windows_absolute_path_becomes_file_uri_no_base_id() {
+        let mut report = AuditReport::default();
+        report.add(finding("AUTH-001", Severity::Critical, "msg", None));
+        // Simulate a Windows path passed from the CLI
+        let log = to_sarif(&report, "C:\\Users\\dev\\contracts\\lib.rs", "2.5.0", &[]);
+        let loc = &log.runs[0].results[0].locations[0];
+        let uri = &loc.physical_location.artifact_location.uri;
+        assert!(
+            uri.starts_with("file://"),
+            "Windows path must become file: URI"
+        );
+        assert!(
+            uri.contains("contracts/lib.rs"),
+            "path segments must be preserved"
+        );
+        assert_eq!(
+            loc.physical_location.artifact_location.uri_base_id, None,
+            "absolute paths must not carry uriBaseId"
+        );
+    }
+
+    // ── URI helper unit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn encode_path_segment_passthrough_unreserved() {
+        assert_eq!(encode_path_segment("lib.rs"), "lib.rs");
+        assert_eq!(encode_path_segment("my-contract_v1~"), "my-contract_v1~");
+    }
+
+    #[test]
+    fn encode_path_segment_encodes_space_and_percent() {
+        assert_eq!(encode_path_segment("my file"), "my%20file");
+        assert_eq!(encode_path_segment("100%"), "100%25");
+    }
+
+    #[test]
+    fn encode_path_segment_encodes_hash_query_brackets() {
+        assert_eq!(encode_path_segment("a#b"), "a%23b");
+        assert_eq!(encode_path_segment("a?b"), "a%3Fb");
+        assert_eq!(encode_path_segment("a[b]"), "a%5Bb%5D");
+    }
+
+    #[test]
+    fn relative_uri_from_path_preserves_slashes() {
+        assert_eq!(
+            relative_uri_from_path("contracts/token/src/lib.rs"),
+            "contracts/token/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn relative_uri_from_path_encodes_spaces_in_segments() {
+        assert_eq!(
+            relative_uri_from_path("my contracts/token lib.rs"),
+            "my%20contracts/token%20lib.rs"
+        );
+    }
+
+    #[test]
+    fn relative_uri_from_path_normalises_backslashes() {
+        assert_eq!(
+            relative_uri_from_path("contracts\\token\\lib.rs"),
+            "contracts/token/lib.rs"
+        );
+    }
+
+    #[test]
+    fn is_absolute_source_path_unix() {
+        assert!(is_absolute_source_path("/home/user/lib.rs"));
+        assert!(!is_absolute_source_path("contracts/lib.rs"));
+    }
+
+    #[test]
+    fn is_absolute_source_path_windows() {
+        assert!(is_absolute_source_path("C:\\Users\\dev\\lib.rs"));
+        assert!(is_absolute_source_path("D:/projects/lib.rs"));
+        assert!(!is_absolute_source_path("contracts/lib.rs"));
+    }
+
+    #[test]
+    fn file_uri_from_path_unix_encodes_spaces() {
+        assert_eq!(
+            file_uri_from_path("/home/my user/lib.rs"),
+            "file:///home/my%20user/lib.rs"
+        );
+    }
+
+    #[test]
+    fn file_uri_from_path_windows_produces_triple_slash() {
+        let uri = file_uri_from_path("C:\\Users\\dev\\lib.rs");
+        assert!(uri.starts_with("file://"));
+        assert!(uri.contains("C:"));
+        assert!(!uri.contains('\\'), "backslashes must be converted");
     }
 
     // ── Location string appended to message ───────────────────────────────

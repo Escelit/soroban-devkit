@@ -362,3 +362,43 @@ fn invalid_format_exits_nonzero() {
         .assert()
         .failure();
 }
+
+#[test]
+fn list_rules_with_sarif_format_exits_nonzero_with_error() {
+    sdkt()
+        .args(["audit", "--list-rules", "--format", "sarif"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("--format sarif"));
+}
+
+#[test]
+fn sarif_uribaseid_present_for_relative_path() {
+    // Write a fixture with a relative path (just a filename in the cwd).
+    let rel_name = "_sarif_test_relative_fixture.rs";
+    let cwd = std::env::current_dir().unwrap();
+    let abs = cwd.join(rel_name);
+    std::fs::write(&abs, "pub fn mint(to: Address) { }\n").unwrap();
+
+    let out = sdkt()
+        .args(["audit", rel_name, "--format", "sarif"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    // Best-effort cleanup; ignore errors.
+    let _ = std::fs::remove_file(&abs);
+
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let results = v["runs"][0]["results"].as_array().unwrap();
+    if !results.is_empty() {
+        let uri_base =
+            &results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uriBaseId"];
+        assert_eq!(
+            uri_base, "%SRCROOT%",
+            "relative path must have %SRCROOT% uriBaseId"
+        );
+    }
+}

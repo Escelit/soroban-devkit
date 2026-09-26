@@ -3990,6 +3990,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if list_rules {
+                // SARIF is not meaningful for listing rules — reject early so
+                // automation never receives unexpected plain text on stdout.
+                if audit_fmt == AuditFormat::Sarif {
+                    eprintln!(
+                        "Error: --format sarif is not supported with --list-rules. \
+                         Use --format json or --format pretty."
+                    );
+                    process::exit(1);
+                }
                 let all = sdkt_audit::all_rules();
                 if fmt == OutputFormat::Json {
                     let items: Vec<sdkt_audit::RuleInfo> = all
@@ -4253,33 +4262,13 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                                 description: r.description().to_string(),
                             })
                             .collect();
-                        // Normalize the source path to a valid URI-reference:
-                        // SARIF requires `artifactLocation.uri` to be a valid
-                        // URI-reference (RFC 3986). Windows absolute paths
-                        // (e.g. `C:\foo\bar.rs`) are not valid URI-references,
-                        // so we replace backslashes with forward slashes and
-                        // strip any leading drive letter + colon so the result
-                        // is always a relative URI-reference that validates on
-                        // every platform.
-                        let sarif_uri = {
-                            let forward = path.replace('\\', "/");
-                            // Strip a Windows drive prefix such as "C:/" → "/"
-                            // by removing everything up to and including the
-                            // first colon when it appears before the first slash.
-                            if let Some(colon_pos) = forward.find(':') {
-                                let slash_pos = forward.find('/').unwrap_or(forward.len());
-                                if colon_pos < slash_pos {
-                                    forward[colon_pos + 1..].to_string()
-                                } else {
-                                    forward
-                                }
-                            } else {
-                                forward
-                            }
-                        };
+                        // Path-to-URI normalisation (backslash→slash, drive
+                        // strip, percent-encoding) is handled entirely inside
+                        // sdkt_audit::sarif so the raw CLI path is passed
+                        // through unchanged.
                         let sarif_str = sdkt_audit::report_to_sarif_string(
                             &report,
-                            &sarif_uri,
+                            &path,
                             sdkt_version_string(),
                             &rules_info,
                         )?;
