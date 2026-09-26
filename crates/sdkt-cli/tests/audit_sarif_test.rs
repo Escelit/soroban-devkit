@@ -53,8 +53,7 @@ fn sarif_output_has_version_and_schema_fields() {
         .stdout
         .clone();
 
-    let v: serde_json::Value =
-        serde_json::from_slice(&out).expect("sarif output is valid JSON");
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("sarif output is valid JSON");
 
     assert_eq!(v["version"], "2.1.0", "SARIF version must be 2.1.0");
     assert!(
@@ -68,7 +67,11 @@ fn sarif_output_has_version_and_schema_fields() {
 #[test]
 fn sarif_output_has_tool_driver() {
     let dir = TempDir::new().unwrap();
-    let path = write_fixture(&dir, "ok.rs", "pub fn balance(who: Address) -> u32 { require_auth(); 0 }\n");
+    let path = write_fixture(
+        &dir,
+        "ok.rs",
+        "pub fn balance(who: Address) -> u32 { require_auth(); 0 }\n",
+    );
     let out = sdkt()
         .args(["audit", path.to_str().unwrap(), "--format", "sarif"])
         .assert()
@@ -80,10 +83,7 @@ fn sarif_output_has_tool_driver() {
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
     let driver = &v["runs"][0]["tool"]["driver"];
     assert_eq!(driver["name"], "sdkt", "tool name is sdkt");
-    assert!(
-        driver["version"].is_string(),
-        "tool version is a string"
-    );
+    assert!(driver["version"].is_string(), "tool version is a string");
     assert!(
         driver["informationUri"].is_string(),
         "informationUri is a string"
@@ -118,7 +118,10 @@ fn sarif_each_finding_becomes_a_result() {
     for result in results {
         assert!(result["ruleId"].is_string(), "ruleId present");
         assert!(result["level"].is_string(), "level present");
-        assert!(result["message"]["text"].is_string(), "message.text present");
+        assert!(
+            result["message"]["text"].is_string(),
+            "message.text present"
+        );
         assert!(result["locations"].is_array(), "locations array present");
     }
 }
@@ -165,7 +168,10 @@ fn sarif_warning_severity_maps_to_warning_level() {
     let results = v["runs"][0]["results"].as_array().unwrap();
     let move001 = results.iter().find(|r| r["ruleId"] == "MOVE-001");
     let result = move001.expect("MOVE-001 (warning) finding present");
-    assert_eq!(result["level"], "warning", "Warning severity maps to SARIF warning");
+    assert_eq!(
+        result["level"], "warning",
+        "Warning severity maps to SARIF warning"
+    );
 }
 
 // ── Artifact location (file path) ─────────────────────────────────────────────
@@ -225,10 +231,7 @@ fn sarif_rule_ids_appear_in_rules_section() {
 
     // Every ruleId in results must have a matching entry in the rules array.
     let results = v["runs"][0]["results"].as_array().unwrap();
-    let rule_ids_in_rules: Vec<&str> = rules
-        .iter()
-        .filter_map(|r| r["id"].as_str())
-        .collect();
+    let rule_ids_in_rules: Vec<&str> = rules.iter().filter_map(|r| r["id"].as_str()).collect();
 
     for result in results {
         let rid = result["ruleId"].as_str().unwrap();
@@ -259,7 +262,10 @@ fn sarif_empty_findings_produces_valid_document_with_zero_results() {
 
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
     let results = v["runs"][0]["results"].as_array().expect("results array");
-    assert!(results.is_empty(), "clean source produces zero SARIF results");
+    assert!(
+        results.is_empty(),
+        "clean source produces zero SARIF results"
+    );
     // Rules section should also be empty when there are no findings.
     let rules = v["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
     assert!(rules.is_empty(), "no rules section for zero findings");
@@ -322,7 +328,10 @@ fn json_format_still_produces_findings_and_summary_fields() {
         .clone();
 
     let v: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
-    assert!(v.get("findings").is_some(), "json output must have findings");
+    assert!(
+        v.get("findings").is_some(),
+        "json output must have findings"
+    );
     assert!(v.get("summary").is_some(), "json output must have summary");
     // Ensure it does NOT look like SARIF
     assert!(v.get("runs").is_none(), "json output must not be SARIF");
@@ -343,7 +352,11 @@ fn pretty_format_still_produces_text_report() {
 #[test]
 fn invalid_format_exits_nonzero() {
     let dir = TempDir::new().unwrap();
-    let path = write_fixture(&dir, "ok.rs", "pub fn balance(who: Address) -> u32 { require_auth(); 0 }\n");
+    let path = write_fixture(
+        &dir,
+        "ok.rs",
+        "pub fn balance(who: Address) -> u32 { require_auth(); 0 }\n",
+    );
     sdkt()
         .args(["audit", path.to_str().unwrap(), "--format", "xml"])
         .assert()

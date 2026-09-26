@@ -269,8 +269,16 @@ mod tests {
 
     fn make_rules() -> Vec<RuleInfo> {
         vec![
-            rule_info("AUTH-001", Severity::Critical, "Missing require_auth() in privileged function"),
-            rule_info("AUTH-003", Severity::Warning, "Unguarded initialize function"),
+            rule_info(
+                "AUTH-001",
+                Severity::Critical,
+                "Missing require_auth() in privileged function",
+            ),
+            rule_info(
+                "AUTH-003",
+                Severity::Warning,
+                "Unguarded initialize function",
+            ),
             rule_info("MOVE-001", Severity::Info, "Suspicious move-after-use"),
         ]
     }
@@ -408,7 +416,12 @@ mod tests {
     fn result_artifact_uri_matches_source_file() {
         let mut report = AuditReport::default();
         report.add(finding("AUTH-001", Severity::Critical, "msg", None));
-        let log = to_sarif(&report, "contracts/token/src/lib.rs", "2.5.0", &make_rules());
+        let log = to_sarif(
+            &report,
+            "contracts/token/src/lib.rs",
+            "2.5.0",
+            &make_rules(),
+        );
         let loc = &log.runs[0].results[0].locations[0];
         assert_eq!(
             loc.physical_location.artifact_location.uri,
@@ -440,7 +453,12 @@ mod tests {
     #[test]
     fn no_location_message_unchanged() {
         let mut report = AuditReport::default();
-        report.add(finding("AUTH-001", Severity::Critical, "Missing auth", None));
+        report.add(finding(
+            "AUTH-001",
+            Severity::Critical,
+            "Missing auth",
+            None,
+        ));
         let log = to_sarif(&report, "src/lib.rs", "2.5.0", &make_rules());
         assert_eq!(log.runs[0].results[0].message.text, "Missing auth");
     }
@@ -484,12 +502,24 @@ mod tests {
             .expect("serialization");
         // Spot-check camelCase field names required by the SARIF schema.
         assert!(json.contains("\"ruleId\""), "ruleId field");
-        assert!(json.contains("\"physicalLocation\""), "physicalLocation field");
-        assert!(json.contains("\"artifactLocation\""), "artifactLocation field");
+        assert!(
+            json.contains("\"physicalLocation\""),
+            "physicalLocation field"
+        );
+        assert!(
+            json.contains("\"artifactLocation\""),
+            "artifactLocation field"
+        );
         assert!(json.contains("\"uriBaseId\""), "uriBaseId field");
         assert!(json.contains("\"informationUri\""), "informationUri field");
-        assert!(json.contains("\"shortDescription\""), "shortDescription field");
-        assert!(json.contains("\"defaultConfiguration\""), "defaultConfiguration field");
+        assert!(
+            json.contains("\"shortDescription\""),
+            "shortDescription field"
+        );
+        assert!(
+            json.contains("\"defaultConfiguration\""),
+            "defaultConfiguration field"
+        );
     }
 
     #[test]
