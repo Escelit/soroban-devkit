@@ -130,7 +130,11 @@ fn is_absolute_source_path(source_file: &str) -> bool {
     if source_file.starts_with('/') {
         return true;
     }
-    // Windows absolute: `C:\…` or `C:/…` (drive letter + colon + separator)
+    // Windows UNC absolute: `\\server\share\…` or `//server/share/…`
+    if source_file.starts_with("\\\\") || source_file.starts_with("//") {
+        return true;
+    }
+    // Windows drive-letter absolute: `C:\…` or `C:/…`
     let bytes = source_file.as_bytes();
     if bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
@@ -198,8 +202,9 @@ fn relative_uri_from_path(path: &str) -> String {
 
 /// Convert an absolute Unix or Windows path into a `file:` URI.
 ///
-/// * Unix `/foo/bar baz.rs` → `file:///foo/bar%20baz.rs`
-/// * Windows `C:\foo\bar baz.rs` → `file:///C:/foo/bar%20baz.rs`
+/// * Unix `/foo/bar baz.rs`           → `file:///foo/bar%20baz.rs`
+/// * Windows `C:\foo\bar baz.rs`      → `file:///C:/foo/bar%20baz.rs`
+/// * Windows UNC `\\srv\share\a b.rs` → `file://srv/share/a%20b.rs`
 fn file_uri_from_path(path: &str) -> String {
     // Normalise Windows separators.
     let forward = path.replace('\\', "/");
@@ -208,9 +213,9 @@ fn file_uri_from_path(path: &str) -> String {
         .split('/')
         .map(|seg| {
             // Preserve empty segments (produced by a leading `/` on Unix paths
-            // and by `//` sequences) and the Windows drive segment (`C:`) as-is.
-            // `:` is allowed in path segments per RFC 3986 §3.3 and must not be
-            // percent-encoded because `C%3A` is not a valid Windows drive prefix.
+            // and by `//` on UNC paths) and the Windows drive segment (`C:`)
+            // as-is.  `:` is allowed in path segments per RFC 3986 §3.3 and
+            // must not be percent-encoded because `C%3A` is not a valid drive.
             if seg.is_empty() || (seg.len() == 2 && seg.as_bytes()[1] == b':') {
                 seg.to_string()
             } else {
@@ -219,17 +224,30 @@ fn file_uri_from_path(path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("/");
-    // RFC 8089 §2: a `file:` URI with a local path uses an empty authority and
-    // the path always starts with `/`:
-    //   file:///foo/bar      (Unix: authority="" + path="/foo/bar")
-    //   file:///C:/foo/bar   (Windows: authority="" + path="/C:/foo/bar")
+
+    // RFC 8089 URI construction:
     //
-    // `encoded` for Unix already starts with `/` (the leading empty segment
-    // joins to ""), so strip it before prepending `file:///` to avoid `////`.
-    // `encoded` for Windows starts with `C:/`, so we prepend `/` to make the
-    // path component start with `/C:/`.
-    let path_part = encoded.trim_start_matches('/');
-    format!("file:///{}", path_part)
+    // UNC path  \\server\share\path  normalises to  //server/share/path
+    //   → authority = "server", path = "/share/path"
+    //   → file://server/share/path
+    //
+    // Unix path  /foo/bar
+    //   → authority = "", path = "/foo/bar"
+    //   → file:///foo/bar   (strip the leading `/` that trim gives us)
+    //
+    // Windows drive  C:/foo/bar
+    //   → authority = "", path = "/C:/foo/bar"
+    //   → file:///C:/foo/bar
+    if forward.starts_with("//") {
+        // UNC: `encoded` = `//server/share/path`; `file://` + strip `//` =
+        // `file://server/share/path` where `server` is the URI authority.
+        let unc_part = encoded.trim_start_matches('/');
+        format!("file://{}", unc_part)
+    } else {
+        // Unix / Windows drive: strip any leading `/` then prepend `file:///`.
+        let path_part = encoded.trim_start_matches('/');
+        format!("file:///{}", path_part)
+    }
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -664,9 +682,54 @@ mod tests {
     #[test]
     fn file_uri_from_path_windows_produces_triple_slash() {
         let uri = file_uri_from_path("C:\\Users\\dev\\lib.rs");
-        assert!(uri.starts_with("file://"));
+        assert!(
+            uri.starts_with("file:///"),
+            "drive path needs empty authority"
+        );
         assert!(uri.contains("C:"));
         assert!(!uri.contains('\\'), "backslashes must be converted");
+    }
+
+    #[test]
+    fn is_absolute_source_path_unc() {
+        assert!(is_absolute_source_path("\\\\server\\share\\file.rs"));
+        assert!(is_absolute_source_path("//server/share/file.rs"));
+        // relative paths with a single slash prefix are not UNC
+        assert!(!is_absolute_source_path("contracts/lib.rs"));
+    }
+
+    #[test]
+    fn file_uri_from_path_unc_preserves_server_as_authority() {
+        // \\server\share\a b.rs → file://server/share/a%20b.rs
+        assert_eq!(
+            file_uri_from_path("\\\\server\\share\\a b.rs"),
+            "file://server/share/a%20b.rs"
+        );
+    }
+
+    #[test]
+    fn file_uri_from_path_unc_forward_slash_form() {
+        assert_eq!(
+            file_uri_from_path("//server/share/lib.rs"),
+            "file://server/share/lib.rs"
+        );
+    }
+
+    #[test]
+    fn result_artifact_uri_unc_path_becomes_file_uri_no_base_id() {
+        let mut report = AuditReport::default();
+        report.add(finding("AUTH-001", Severity::Critical, "msg", None));
+        let log = to_sarif(&report, "\\\\srv\\share\\lib.rs", "2.5.0", &[]);
+        let loc = &log.runs[0].results[0].locations[0];
+        let uri = &loc.physical_location.artifact_location.uri;
+        assert!(
+            uri.starts_with("file://srv"),
+            "UNC server must be URI authority"
+        );
+        assert_eq!(
+            loc.physical_location.artifact_location.uri_base_id, None,
+            "UNC paths must not carry uriBaseId"
+        );
     }
 
     // ── Location string appended to message ───────────────────────────────
