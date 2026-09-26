@@ -231,20 +231,25 @@ fn file_uri_from_path(path: &str) -> String {
     //   → authority = "server", path = "/share/path"
     //   → file://server/share/path
     //
-    // Unix path  /foo/bar
+    // Unix path  /foo/bar  (or ///foo/bar with extra leading slashes)
     //   → authority = "", path = "/foo/bar"
     //   → file:///foo/bar   (strip the leading `/` that trim gives us)
     //
     // Windows drive  C:/foo/bar
     //   → authority = "", path = "/C:/foo/bar"
     //   → file:///C:/foo/bar
-    if forward.starts_with("//") {
+    //
+    // A path with three or more leading slashes (e.g. `///home/user/lib.rs`)
+    // is a degenerate local Unix path, NOT a UNC path — guard the UNC branch
+    // with `!starts_with("///")` so those extra slashes collapse correctly.
+    if forward.starts_with("//") && !forward.starts_with("///") {
         // UNC: `encoded` = `//server/share/path`; `file://` + strip `//` =
         // `file://server/share/path` where `server` is the URI authority.
         let unc_part = encoded.trim_start_matches('/');
         format!("file://{}", unc_part)
     } else {
-        // Unix / Windows drive: strip any leading `/` then prepend `file:///`.
+        // Unix / Windows drive / extra-slash Unix: strip leading `/` then
+        // prepend `file:///`.
         let path_part = encoded.trim_start_matches('/');
         format!("file:///{}", path_part)
     }
@@ -712,6 +717,16 @@ mod tests {
         assert_eq!(
             file_uri_from_path("//server/share/lib.rs"),
             "file://server/share/lib.rs"
+        );
+    }
+
+    #[test]
+    fn file_uri_from_path_triple_slash_unix_is_local_not_unc() {
+        // ///home/user/lib.rs has three leading slashes — it is a degenerate
+        // local Unix path, not a UNC path. `home` must NOT become the authority.
+        assert_eq!(
+            file_uri_from_path("///home/user/lib.rs"),
+            "file:///home/user/lib.rs"
         );
     }
 
