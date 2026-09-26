@@ -201,17 +201,16 @@ fn relative_uri_from_path(path: &str) -> String {
 /// * Unix `/foo/bar baz.rs` → `file:///foo/bar%20baz.rs`
 /// * Windows `C:\foo\bar baz.rs` → `file:///C:/foo/bar%20baz.rs`
 fn file_uri_from_path(path: &str) -> String {
-    // Normalise Windows separators and strip a drive prefix for encoding,
-    // then re-add it after.
+    // Normalise Windows separators.
     let forward = path.replace('\\', "/");
     // Split on `/` and encode each segment.
     let encoded = forward
         .split('/')
         .map(|seg| {
-            // Preserve the empty segments that produce leading `//` in the URI
-            // and the drive letter segment (`C:`) as-is (`:` is allowed in
-            // path segments per RFC 3986 §3.3 and MUST NOT be encoded here
-            // because `C%3A` is not a valid Windows drive reference).
+            // Preserve empty segments (produced by a leading `/` on Unix paths
+            // and by `//` sequences) and the Windows drive segment (`C:`) as-is.
+            // `:` is allowed in path segments per RFC 3986 §3.3 and must not be
+            // percent-encoded because `C%3A` is not a valid Windows drive prefix.
             if seg.is_empty() || (seg.len() == 2 && seg.as_bytes()[1] == b':') {
                 seg.to_string()
             } else {
@@ -220,10 +219,17 @@ fn file_uri_from_path(path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("/");
-    // Absolute Unix paths start with `/`; Windows paths start with the drive.
-    // `file:` URIs always have an empty authority (`//`), so the path starts
-    // with `///` for Unix (`file:` + `//` + `/path`) and `///C:/` for Windows.
-    format!("file://{}", encoded)
+    // RFC 8089 §2: a `file:` URI with a local path uses an empty authority and
+    // the path always starts with `/`:
+    //   file:///foo/bar      (Unix: authority="" + path="/foo/bar")
+    //   file:///C:/foo/bar   (Windows: authority="" + path="/C:/foo/bar")
+    //
+    // `encoded` for Unix already starts with `/` (the leading empty segment
+    // joins to ""), so strip it before prepending `file:///` to avoid `////`.
+    // `encoded` for Windows starts with `C:/`, so we prepend `/` to make the
+    // path component start with `/C:/`.
+    let path_part = encoded.trim_start_matches('/');
+    format!("file:///{}", path_part)
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
